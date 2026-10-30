@@ -16,7 +16,7 @@ async function processPayloadsPromise(payloads, loadFunc) {
 	const promises = payloads.map((payload) => new Promise((resolve, reject) => {
 		setTimeout(async () => {
 			try {
-				const data = await loadFunc(payload.item);
+				const data = await loadFunc(payload);
 				await writeFile(payload.destinationPath, data);
 				logPayloadResult(payload);
 				resolve();
@@ -70,7 +70,8 @@ async function writeMarkdownFilesPromise(posts) {
 	}
 }
 
-async function loadMarkdownFilePromise(post) {
+async function loadMarkdownFilePromise(payload) {
+	const post = payload.item;
 	let output = '---\n';
 
 	Object.entries(post.frontmatter).forEach(([key, value]) => {
@@ -114,8 +115,12 @@ async function loadMarkdownFilePromise(post) {
 }
 
 async function writeImageFilesPromise(posts) {
+	// optional local wp-content folder, used to copy media from a local WordPress install or backup
+	const wpContentPath = posts.some((post) => post.imageUrls.length > 0) ? getWpContentPath() : undefined;
+
 	// collect image data from all posts into a single flattened array of payloads
 	let existingCount = 0;
+	let localCount = 0;
 	let delay = 0;
 	const payloads = posts.flatMap((post) => {
 		const postPath = shared.buildPostPath(post);
@@ -128,26 +133,49 @@ async function writeImageFilesPromise(posts) {
 				existingCount++;
 				return [];
 			} else {
+				// prefer copying from the local wp-content folder, if the image lives there
+				const localPath = wpContentPath ? getLocalImagePath(imageUrl, wpContentPath) : undefined;
+				if (localPath) {
+					localCount++;
+				}
+
 				const payload = {
 					item: imageUrl,
-					type: 'image',
+					type: localPath ? 'image:local' : 'image',
 					name: filename,
 					destinationPath,
+					localPath,
 					delay
 				};
-				delay += shared.config.requestDelay;
+
+				if (!localPath) {
+					// only space out requests that actually go over the network
+					delay += shared.config.requestDelay;
+				}
+
 				return [payload];
 			}
 		});
 	});
 
 	logSavingMessage('images', existingCount, payloads.length);
+	if (localCount > 0) {
+		console.log(`${localCount} of them will be copied from the local wp-content folder.`);
+	}
 	if (payloads.length > 0) {
 		await processPayloadsPromise(payloads, loadImageFilePromise);
 	}
 }
 
-async function loadImageFilePromise(imageUrl) {
+async function loadImageFilePromise(payload) {
+	if (payload.localPath) {
+		return fs.promises.readFile(payload.localPath);
+	}
+
+	return loadImageFromUrlPromise(payload.item);
+}
+
+async function loadImageFromUrlPromise(imageUrl) {
 	// only encode the URL if it doesn't already have encoded characters
 	const url = (/%[\da-f]{2}/i).test(imageUrl) ? imageUrl : encodeURI(imageUrl);
 
@@ -174,6 +202,74 @@ async function loadImageFilePromise(imageUrl) {
 
 function checkFile(path) {
 	return fs.existsSync(path);
+}
+
+function getWpContentPath() {
+	if (!shared.config.wpContent) {
+		return undefined;
+	}
+
+	const absolutePath = path.resolve(shared.config.wpContent);
+	try {
+		if (fs.statSync(absolutePath).isDirectory()) {
+			return absolutePath;
+		}
+	} catch (ex) {
+		// fall through to the warning below
+	}
+
+	console.log(chalk.yellow(`Warning: wp-content folder not found at ${absolutePath}. Images will be downloaded instead.`));
+	return undefined;
+}
+
+// maps a media URL onto a file in the local wp-content folder, if it has one
+function getLocalImagePath(imageUrl, wpContentPath) {
+	let pathname;
+	try {
+		pathname = new URL(imageUrl).pathname;
+	} catch (ex) {
+		return undefined;
+	}
+
+	try {
+		pathname = decodeURIComponent(pathname);
+	} catch (ex) {
+		// improperly encoded characters, use the pathname as-is
+	}
+
+	// keep everything after the wp-content/ segment, for example uploads/2020/12/photo.jpg
+	const marker = '/wp-content/';
+	const markerIndex = pathname.toLowerCase().indexOf(marker);
+	if (markerIndex === -1) {
+		return undefined;
+	}
+
+	const segments = pathname
+		.slice(markerIndex + marker.length)
+		.split('/')
+		.filter((segment) => segment && segment !== '.' && segment !== '..');
+	if (segments.length === 0) {
+		return undefined;
+	}
+
+	// the wp-content folder might have been given as the uploads folder itself
+	const segmentLists = [segments];
+	if (segments[0].toLowerCase() === 'uploads' && segments.length > 1) {
+		segmentLists.push(segments.slice(1));
+	}
+
+	const candidates = [];
+	segmentLists.forEach((list) => {
+		candidates.push(path.join(wpContentPath, ...list));
+
+		// WordPress often serves a resized copy of an image, which may be missing from a partial backup
+		const resizedMatch = list[list.length - 1].match(/^(.*?)-\d+x\d+(\.[^.]+)$/);
+		if (resizedMatch) {
+			candidates.push(path.join(wpContentPath, ...list.slice(0, -1), resizedMatch[1] + resizedMatch[2]));
+		}
+	});
+
+	return candidates.find((candidate) => checkFile(candidate));
 }
 
 function logSavingMessage(things, existingCount, remainingCount) {

@@ -8,7 +8,7 @@ Converts a WordPress export XML file into Markdown files. This makes it easy to 
 
 - Saves each post as a separate Markdown file with frontmatter.
 - Also saves drafts, pages, and custom post types, if you have any.
-- Downloads images and updates references to them.
+- Downloads images and updates references to them, or copies them from a local `wp-content` folder.
 - User-friendly wizard guides you through the process.
 - Lots of command line options for configuration, if needed.
 
@@ -231,6 +231,21 @@ Allowed values:
 
 - `true` - Use strict SSL. This is the safer option.
 - `false` - Don't use strict SSL. This will let you avoid the "self-signed certificate" error when working with a self-signed server. Just make sure you know what you're doing.
+
+### Path to wp-content folder?
+
+```
+--wp-content=""
+```
+
+The path to a local `wp-content` folder to copy images from instead of downloading them. This is handy when converting from an offline backup, or from a development copy of the site, where the images still exist on disk but are no longer reachable over the network.
+
+When set, each image URL is mapped to a file in this folder and copied directly, avoiding any network requests. For example, `https://example.com/wp-content/uploads/2020/12/photo.jpg` is copied from `<wp-content>/uploads/2020/12/photo.jpg`. Resized images (like `photo-1024x768.jpg`) fall back to the original file when the resized copy is missing. Any image that can't be found locally is downloaded as usual, so you can safely mix local and remote images.
+
+Allowed values:
+
+- `""` - Don't use a local folder. All images are downloaded.
+- Any path to a `wp-content` folder that exists. You can also point it at the `uploads` folder inside it.
 
 ## Local Development
 

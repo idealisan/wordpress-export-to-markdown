@@ -95,6 +95,12 @@ export function load() {
 			prompt: inquirer.select
 		},
 		{
+			name: 'wp-content',
+			type: 'folder-path',
+			description: 'Path to local wp-content folder to copy images from',
+			default: ''
+		},
+		{
 			name: 'wizard',
 			type: 'boolean',
 			description: 'Use wizard',
